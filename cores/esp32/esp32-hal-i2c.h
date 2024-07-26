@@ -18,7 +18,7 @@
 #define _ESP32_HAL_I2C_H_
 
 #include "soc/soc_caps.h"
-#if SOC_I2C_SUPPORTED
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,5 +43,4 @@ bool i2cIsInit(uint8_t i2c_num);
 }
 #endif
 
-#endif /* SOC_I2C_SUPPORTED */
 #endif /* _ESP32_HAL_I2C_H_ */

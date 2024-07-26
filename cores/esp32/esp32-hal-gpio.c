@@ -16,6 +16,18 @@
 #include "esp32-hal-periman.h"
 #include "hal/gpio_hal.h"
 #include "soc/soc_caps.h"
+#include "PCA95x5/PCA95x5.h"  //added for PCA9535
+#include "Wire/src/Wire.h"
+
+// redefine virtual PIN from num 100
+#define PCA9535_BASE_PIN  100
+#define PCA9535_PIN_COUNT 16
+
+// init PCA9535
+void setupPCA9535() {
+  Wire.begin();
+  pca9535.attach(Wire, 0x20);
+}
 
 // RGB_BUILTIN is defined in pins_arduino.h
 // If RGB_BUILTIN is defined, it will be used as a pin number for the RGB LED
@@ -101,56 +113,45 @@ static bool gpioDetachBus(void *bus) {
   return true;
 }
 
-extern void ARDUINO_ISR_ATTR __pinMode(uint8_t pin, uint8_t mode) {
-#ifdef RGB_BUILTIN
-  if (pin == RGB_BUILTIN) {
-    __pinMode(RGB_BUILTIN - SOC_GPIO_PIN_COUNT, mode);
-    return;
-  }
-#endif
-
-  if (pin >= SOC_GPIO_PIN_COUNT) {
-    log_e("Invalid IO %i selected", pin);
-    return;
-  }
-
-  if (perimanGetPinBus(pin, ESP32_BUS_TYPE_GPIO) == NULL) {
-    perimanSetBusDeinit(ESP32_BUS_TYPE_GPIO, gpioDetachBus);
-    if (!perimanClearPinBus(pin)) {
-      log_e("Deinit of previous bus from IO %i failed", pin);
+extern void ARDUINO_ISR_ATTR __pinMode(uint8_t pin, uint8_t mode) {  // fit TCA9535
+  if (pin >= PCA9535_BASE_PIN && pin < PCA9535_BASE_PIN + PCA9535_PIN_COUNT) {
+    uint8_t pcaPin = pin - PCA9535_BASE_PIN;
+    if (mode == INPUT) {
+      pca9535.direction(pcaPin, PCA95x5::Direction::IN);
+    } else {
+      pca9535.direction(pcaPin, PCA95x5::Direction::OUT);
+    }
+  } else {
+    if (pin >= SOC_GPIO_PIN_COUNT) {
+      log_e("Invalid IO %i selected", pin);
       return;
     }
-  }
 
-  gpio_hal_context_t gpiohal;
-  gpiohal.dev = GPIO_LL_GET_HW(GPIO_PORT_0);
+    gpio_hal_context_t gpiohal;
+    gpiohal.dev = GPIO_LL_GET_HW(GPIO_PORT_0);
 
-  gpio_config_t conf = {
-    .pin_bit_mask = (1ULL << pin),              /*!< GPIO pin: set with bit mask, each bit maps to a GPIO */
-    .mode = GPIO_MODE_DISABLE,                  /*!< GPIO mode: set input/output mode                     */
-    .pull_up_en = GPIO_PULLUP_DISABLE,          /*!< GPIO pull-up                                         */
-    .pull_down_en = GPIO_PULLDOWN_DISABLE,      /*!< GPIO pull-down                                       */
-    .intr_type = gpiohal.dev->pin[pin].int_type /*!< GPIO interrupt type - previously set                 */
-  };
-  if (mode < 0x20) {  //io
-    conf.mode = mode & (INPUT | OUTPUT);
-    if (mode & OPEN_DRAIN) {
-      conf.mode |= GPIO_MODE_DEF_OD;
+    gpio_config_t conf = {
+      .pin_bit_mask = (1ULL << pin),
+      .mode = GPIO_MODE_DISABLE,
+      .pull_up_en = GPIO_PULLUP_DISABLE,
+      .pull_down_en = GPIO_PULLDOWN_DISABLE,
+      .intr_type = gpiohal.dev->pin[pin].int_type
+    };
+
+    if (mode < 0x20) {
+      conf.mode = mode & (INPUT | OUTPUT);
+      if (mode & OPEN_DRAIN) {
+        conf.mode |= GPIO_MODE_DEF_OD;
+      }
+      if (mode & PULLUP) {
+        conf.pull_up_en = GPIO_PULLUP_ENABLE;
+      }
+      if (mode & PULLDOWN) {
+        conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
+      }
     }
-    if (mode & PULLUP) {
-      conf.pull_up_en = GPIO_PULLUP_ENABLE;
-    }
-    if (mode & PULLDOWN) {
-      conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
-    }
-  }
-  if (gpio_config(&conf) != ESP_OK) {
-    log_e("IO %i config failed", pin);
-    return;
-  }
-  if (perimanGetPinBus(pin, ESP32_BUS_TYPE_GPIO) == NULL) {
-    if (!perimanSetPinBus(pin, ESP32_BUS_TYPE_GPIO, (void *)(pin + 1), -1, -1)) {
-      //gpioDetachBus((void *)(pin+1));
+    if (gpio_config(&conf) != ESP_OK) {
+      log_e("IO %i config failed", pin);
       return;
     }
   }
@@ -160,35 +161,32 @@ extern void ARDUINO_ISR_ATTR __pinMode(uint8_t pin, uint8_t mode) {
 uint8_t RGB_BUILTIN_storage = 0;
 #endif
 
-extern void ARDUINO_ISR_ATTR __digitalWrite(uint8_t pin, uint8_t val) {
-#ifdef RGB_BUILTIN
-  if (pin == RGB_BUILTIN) {
-    //use RMT to set all channels on/off
-    RGB_BUILTIN_storage = val;
-    const uint8_t comm_val = val != 0 ? RGB_BRIGHTNESS : 0;
-    neopixelWrite(RGB_BUILTIN, comm_val, comm_val, comm_val);
-    return;
-  }
-#endif  // RGB_BUILTIN
-  if (perimanGetPinBus(pin, ESP32_BUS_TYPE_GPIO) != NULL) {
-    gpio_set_level((gpio_num_t)pin, val);
+extern void ARDUINO_ISR_ATTR __digitalWrite(uint8_t pin, uint8_t val) {  // fit TCA9535
+  if (pin >= PCA9535_BASE_PIN && pin < PCA9535_BASE_PIN + PCA9535_PIN_COUNT) {
+    uint8_t pcaPin = pin - PCA9535_BASE_PIN;
+    pca9535.write(pcaPin, val == HIGH ? PCA95x5::Level::H : PCA95x5::Level::L);
   } else {
-    log_e("IO %i is not set as GPIO.", pin);
+    // use basic function
+    if (perimanGetPinBus(pin, ESP32_BUS_TYPE_GPIO) != NULL) {
+      gpio_set_level((gpio_num_t)pin, val);
+    } else {
+      log_e("IO %i is not set as GPIO.", pin);
+    }
   }
 }
 
-extern int ARDUINO_ISR_ATTR __digitalRead(uint8_t pin) {
-#ifdef RGB_BUILTIN
-  if (pin == RGB_BUILTIN) {
-    return RGB_BUILTIN_storage;
-  }
-#endif
-
-  if (perimanGetPinBus(pin, ESP32_BUS_TYPE_GPIO) != NULL) {
-    return gpio_get_level((gpio_num_t)pin);
+extern int __digitalRead(uint8_t pin) {  // fit TCA9535
+  if (pin >= PCA9535_BASE_PIN && pin < PCA9535_BASE_PIN + PCA9535_PIN_COUNT) {
+    uint8_t pcaPin = pin - PCA9535_BASE_PIN;
+    return pca9535.read(pcaPin) == PCA95x5::Level::H ? HIGH : LOW;
   } else {
-    log_e("IO %i is not set as GPIO.", pin);
-    return 0;
+    // 否则调用标准的 ESP32 GPIO 读取函数
+    if (perimanGetPinBus(pin, ESP32_BUS_TYPE_GPIO) != NULL) {
+      return gpio_get_level((gpio_num_t)pin);
+    } else {
+      log_e("IO %i is not set as GPIO.", pin);
+      return 0;
+    }
   }
 }
 
@@ -205,64 +203,77 @@ static void ARDUINO_ISR_ATTR __onPinInterrupt(void *arg) {
 
 extern void cleanupFunctional(void *arg);
 
-extern void __attachInterruptFunctionalArg(uint8_t pin, voidFuncPtrArg userFunc, void *arg, int intr_type, bool functional) {
-  static bool interrupt_initialized = false;
+extern void __attachInterruptFunctionalArg(uint8_t pin, voidFuncPtrArg userFunc, void *arg, int intr_type, bool functional) {  // fit TCA9535
+  if (pin >= PCA9535_BASE_PIN && pin < PCA9535_BASE_PIN + PCA9535_PIN_COUNT) {
+    // PCA9535  do not support interrupt
+    log_e("PCA9535 pin %i does not support interrupts", pin);
+  } else {
+    static bool interrupt_initialized = false;
 
-  // makes sure that pin -1 (255) will never work -- this follows Arduino standard
-  if (pin >= SOC_GPIO_PIN_COUNT) {
-    return;
-  }
+    // makes sure that pin -1 (255) will never work -- this follows Arduino standard
+    if (pin >= SOC_GPIO_PIN_COUNT) {
+      return;
+    }
 
-  if (!interrupt_initialized) {
-    esp_err_t err = gpio_install_isr_service((int)ARDUINO_ISR_FLAG);
-    interrupt_initialized = (err == ESP_OK) || (err == ESP_ERR_INVALID_STATE);
-  }
-  if (!interrupt_initialized) {
-    log_e("IO %i ISR Service Failed To Start", pin);
-    return;
-  }
+    if (!interrupt_initialized) {
+      esp_err_t err = gpio_install_isr_service((int)ARDUINO_ISR_FLAG);
+      interrupt_initialized = (err == ESP_OK) || (err == ESP_ERR_INVALID_STATE);
+    }
+    if (!interrupt_initialized) {
+      log_e("IO %i ISR Service Failed To Start", pin);
+      return;
+    }
 
-  // if new attach without detach remove old info
-  if (__pinInterruptHandlers[pin].functional && __pinInterruptHandlers[pin].arg) {
-    cleanupFunctional(__pinInterruptHandlers[pin].arg);
-  }
-  __pinInterruptHandlers[pin].fn = (voidFuncPtr)userFunc;
-  __pinInterruptHandlers[pin].arg = arg;
-  __pinInterruptHandlers[pin].functional = functional;
+    // if new attach without detach remove old info
+    if (__pinInterruptHandlers[pin].functional && __pinInterruptHandlers[pin].arg) {
+      cleanupFunctional(__pinInterruptHandlers[pin].arg);
+    }
+    __pinInterruptHandlers[pin].fn = (voidFuncPtr)userFunc;
+    __pinInterruptHandlers[pin].arg = arg;
+    __pinInterruptHandlers[pin].functional = functional;
 
-  gpio_set_intr_type((gpio_num_t)pin, (gpio_int_type_t)(intr_type & 0x7));
-  if (intr_type & 0x8) {
-    gpio_wakeup_enable((gpio_num_t)pin, (gpio_int_type_t)(intr_type & 0x7));
-  }
-  gpio_isr_handler_add((gpio_num_t)pin, __onPinInterrupt, &__pinInterruptHandlers[pin]);
+    gpio_set_intr_type((gpio_num_t)pin, (gpio_int_type_t)(intr_type & 0x7));
+    if (intr_type & 0x8) {
+      gpio_wakeup_enable((gpio_num_t)pin, (gpio_int_type_t)(intr_type & 0x7));
+    }
+    gpio_isr_handler_add((gpio_num_t)pin, __onPinInterrupt, &__pinInterruptHandlers[pin]);
 
-  //FIX interrupts on peripherals outputs (eg. LEDC,...)
-  //Enable input in GPIO register
-  gpio_hal_context_t gpiohal;
-  gpiohal.dev = GPIO_LL_GET_HW(GPIO_PORT_0);
-  gpio_hal_input_enable(&gpiohal, pin);
+    //FIX interrupts on peripherals outputs (eg. LEDC,...)
+    //Enable input in GPIO register
+    gpio_hal_context_t gpiohal;
+    gpiohal.dev = GPIO_LL_GET_HW(GPIO_PORT_0);
+    gpio_hal_input_enable(&gpiohal, pin);
+  }
 }
 
-extern void __attachInterruptArg(uint8_t pin, voidFuncPtrArg userFunc, void *arg, int intr_type) {
-  __attachInterruptFunctionalArg(pin, userFunc, arg, intr_type, false);
-}
-
-extern void __attachInterrupt(uint8_t pin, voidFuncPtr userFunc, int intr_type) {
-  __attachInterruptFunctionalArg(pin, (voidFuncPtrArg)userFunc, NULL, intr_type, false);
-}
-
-extern void __detachInterrupt(uint8_t pin) {
-  gpio_isr_handler_remove((gpio_num_t)pin);  //remove handle and disable isr for pin
-  gpio_wakeup_disable((gpio_num_t)pin);
-
-  if (__pinInterruptHandlers[pin].functional && __pinInterruptHandlers[pin].arg) {
-    cleanupFunctional(__pinInterruptHandlers[pin].arg);
+extern void __attachInterrupt(uint8_t pin, voidFuncPtr userFunc, int intr_type) { // fit TCA9535 
+  if (pin >= PCA9535_BASE_PIN && pin < PCA9535_BASE_PIN + PCA9535_PIN_COUNT) {
+    // PCA9535 don't support
+    log_e("PCA9535 pin %i does not support interrupts", pin);
+  } else {
+    // or we take basic function of it
+    __attachInterruptFunctionalArg(pin, (voidFuncPtrArg)userFunc, NULL, intr_type, false);
   }
-  __pinInterruptHandlers[pin].fn = NULL;
-  __pinInterruptHandlers[pin].arg = NULL;
-  __pinInterruptHandlers[pin].functional = false;
+}
 
-  gpio_set_intr_type((gpio_num_t)pin, GPIO_INTR_DISABLE);
+extern void __detachInterrupt(uint8_t pin) {  // fit TCA9535 
+  if (pin >= PCA9535_BASE_PIN && pin < PCA9535_BASE_PIN + PCA9535_PIN_COUNT) {
+    // PCA9535 does not support interrupts
+    log_e("PCA9535 pin %i does not support interrupts", pin);
+  } else {
+    // if we use basic function  of ESP32 detachInterrupt 
+    gpio_isr_handler_remove((gpio_num_t)pin);
+    gpio_wakeup_disable((gpio_num_t)pin);
+
+    if (__pinInterruptHandlers[pin].functional && __pinInterruptHandlers[pin].arg) {
+      cleanupFunctional(__pinInterruptHandlers[pin].arg);
+    }
+    __pinInterruptHandlers[pin].fn = NULL;
+    __pinInterruptHandlers[pin].arg = NULL;
+    __pinInterruptHandlers[pin].functional = false;
+
+    gpio_set_intr_type((gpio_num_t)pin, GPIO_INTR_DISABLE);
+  }
 }
 
 extern void enableInterrupt(uint8_t pin) {

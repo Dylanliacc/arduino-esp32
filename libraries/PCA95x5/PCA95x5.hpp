@@ -1,5 +1,5 @@
 #include <Arduino.h>
-#include <Wire.h>
+#include "D:/Users/seeed/AppData/Local/Arduino15/packages/esp32/hardware/esp32/3.0.3/libraries/Wire/src/Wire.h"
 
 namespace PCA95x5 {
 

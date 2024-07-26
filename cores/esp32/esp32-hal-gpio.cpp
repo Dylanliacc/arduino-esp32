@@ -16,13 +16,16 @@
 #include "esp32-hal-periman.h"
 #include "hal/gpio_hal.h"
 #include "soc/soc_caps.h"
-#include "PCA95x5/PCA95x5.h"  //added for PCA9535
-#include "Wire/src/Wire.h"
 
-// redefine virtual PIN from num 100
-#define PCA9535_BASE_PIN  100
-#define PCA9535_PIN_COUNT 16
 
+
+//include cpp header files 
+#include "D:/Users/seeed/AppData/Local/Arduino15/packages/esp32/hardware/esp32/3.0.3/libraries/PCA95x5/PCA95x5.hpp"  //added for PCA9535
+#include "D:/Users/seeed/AppData/Local/Arduino15/packages/esp32/hardware/esp32/3.0.3/libraries/Wire/src/Wire.h"
+
+
+//class defination
+PCA95x5::PCA95x5<> pca9535;
 // init PCA9535
 void setupPCA9535() {
   Wire.begin();
@@ -115,7 +118,7 @@ static bool gpioDetachBus(void *bus) {
 
 extern void ARDUINO_ISR_ATTR __pinMode(uint8_t pin, uint8_t mode) {  // fit TCA9535
   if (pin >= PCA9535_BASE_PIN && pin < PCA9535_BASE_PIN + PCA9535_PIN_COUNT) {
-    uint8_t pcaPin = pin - PCA9535_BASE_PIN;
+    PCA95x5::Port::Port pcaPin = static_cast<PCA95x5::Port::Port>(pin - PCA9535_BASE_PIN);
     if (mode == INPUT) {
       pca9535.direction(pcaPin, PCA95x5::Direction::IN);
     } else {
@@ -135,13 +138,13 @@ extern void ARDUINO_ISR_ATTR __pinMode(uint8_t pin, uint8_t mode) {  // fit TCA9
       .mode = GPIO_MODE_DISABLE,
       .pull_up_en = GPIO_PULLUP_DISABLE,
       .pull_down_en = GPIO_PULLDOWN_DISABLE,
-      .intr_type = gpiohal.dev->pin[pin].int_type
+      .intr_type = static_cast<gpio_int_type_t>(gpiohal.dev->pin[pin].int_type)
     };
 
     if (mode < 0x20) {
-      conf.mode = mode & (INPUT | OUTPUT);
+      conf.mode = static_cast<gpio_mode_t>(mode & (INPUT | OUTPUT));
       if (mode & OPEN_DRAIN) {
-        conf.mode |= GPIO_MODE_DEF_OD;
+        conf.mode = static_cast<gpio_mode_t>(conf.mode | GPIO_MODE_DEF_OD);
       }
       if (mode & PULLUP) {
         conf.pull_up_en = GPIO_PULLUP_ENABLE;
@@ -157,38 +160,41 @@ extern void ARDUINO_ISR_ATTR __pinMode(uint8_t pin, uint8_t mode) {  // fit TCA9
   }
 }
 
+
 #ifdef RGB_BUILTIN
 uint8_t RGB_BUILTIN_storage = 0;
 #endif
 
 extern void ARDUINO_ISR_ATTR __digitalWrite(uint8_t pin, uint8_t val) {  // fit TCA9535
   if (pin >= PCA9535_BASE_PIN && pin < PCA9535_BASE_PIN + PCA9535_PIN_COUNT) {
-    uint8_t pcaPin = pin - PCA9535_BASE_PIN;
+    PCA95x5::Port::Port pcaPin = static_cast<PCA95x5::Port::Port>(pin - PCA9535_BASE_PIN);
     pca9535.write(pcaPin, val == HIGH ? PCA95x5::Level::H : PCA95x5::Level::L);
   } else {
     // use basic function
     if (perimanGetPinBus(pin, ESP32_BUS_TYPE_GPIO) != NULL) {
-      gpio_set_level((gpio_num_t)pin, val);
+      gpio_set_level(static_cast<gpio_num_t>(pin), val);
     } else {
       log_e("IO %i is not set as GPIO.", pin);
     }
   }
 }
 
+
 extern int __digitalRead(uint8_t pin) {  // fit TCA9535
   if (pin >= PCA9535_BASE_PIN && pin < PCA9535_BASE_PIN + PCA9535_PIN_COUNT) {
-    uint8_t pcaPin = pin - PCA9535_BASE_PIN;
+    PCA95x5::Port::Port pcaPin = static_cast<PCA95x5::Port::Port>(pin - PCA9535_BASE_PIN);
     return pca9535.read(pcaPin) == PCA95x5::Level::H ? HIGH : LOW;
   } else {
     // 否则调用标准的 ESP32 GPIO 读取函数
     if (perimanGetPinBus(pin, ESP32_BUS_TYPE_GPIO) != NULL) {
-      return gpio_get_level((gpio_num_t)pin);
+      return gpio_get_level(static_cast<gpio_num_t>(pin));
     } else {
       log_e("IO %i is not set as GPIO.", pin);
       return 0;
     }
   }
 }
+
 
 static void ARDUINO_ISR_ATTR __onPinInterrupt(void *arg) {
   InterruptHandle_t *isr = (InterruptHandle_t *)arg;
@@ -232,11 +238,11 @@ extern void __attachInterruptFunctionalArg(uint8_t pin, voidFuncPtrArg userFunc,
     __pinInterruptHandlers[pin].arg = arg;
     __pinInterruptHandlers[pin].functional = functional;
 
-    gpio_set_intr_type((gpio_num_t)pin, (gpio_int_type_t)(intr_type & 0x7));
+    gpio_set_intr_type(static_cast<gpio_num_t>(pin), static_cast<gpio_int_type_t>(intr_type & 0x7));
     if (intr_type & 0x8) {
-      gpio_wakeup_enable((gpio_num_t)pin, (gpio_int_type_t)(intr_type & 0x7));
+      gpio_wakeup_enable(static_cast<gpio_num_t>(pin), static_cast<gpio_int_type_t>(intr_type & 0x7));
     }
-    gpio_isr_handler_add((gpio_num_t)pin, __onPinInterrupt, &__pinInterruptHandlers[pin]);
+    gpio_isr_handler_add(static_cast<gpio_num_t>(pin), __onPinInterrupt, &__pinInterruptHandlers[pin]);
 
     //FIX interrupts on peripherals outputs (eg. LEDC,...)
     //Enable input in GPIO register
@@ -245,6 +251,7 @@ extern void __attachInterruptFunctionalArg(uint8_t pin, voidFuncPtrArg userFunc,
     gpio_hal_input_enable(&gpiohal, pin);
   }
 }
+
 
 extern void __attachInterrupt(uint8_t pin, voidFuncPtr userFunc, int intr_type) { // fit TCA9535 
   if (pin >= PCA9535_BASE_PIN && pin < PCA9535_BASE_PIN + PCA9535_PIN_COUNT) {
@@ -283,7 +290,6 @@ extern void enableInterrupt(uint8_t pin) {
 extern void disableInterrupt(uint8_t pin) {
   gpio_intr_disable((gpio_num_t)pin);
 }
-
 extern void pinMode(uint8_t pin, uint8_t mode) __attribute__((weak, alias("__pinMode")));
 extern void digitalWrite(uint8_t pin, uint8_t val) __attribute__((weak, alias("__digitalWrite")));
 extern int digitalRead(uint8_t pin) __attribute__((weak, alias("__digitalRead")));

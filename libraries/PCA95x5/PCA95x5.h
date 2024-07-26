@@ -1,4 +1,4 @@
-#include <cores\esp32\Arduino.h>
+#include <Arduino.h>
 #include <Wire.h>
 
 namespace PCA95x5 {
